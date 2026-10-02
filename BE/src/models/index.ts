@@ -1,7 +1,9 @@
 import type { MigratableModel } from './helpers';
 import { AccessEvent } from './accessEvent.model';
 import { AccessGrant } from './accessGrant.model';
+import { Appointment } from './appointment.model';
 import { AuthChallenge } from './authChallenge.model';
+import { Clinic } from './clinic.model';
 import { ClinicalDocument } from './clinicalDocument.model';
 import { Consent } from './consent.model';
 import { DeletionRequest } from './deletionRequest.model';
@@ -21,8 +23,10 @@ import { User } from './user.model';
 export {
   AccessEvent,
   AccessGrant,
+  Appointment,
   AuthChallenge,
   ClinicalDocument,
+  Clinic,
   Consent,
   DeletionRequest,
   FileObject,
@@ -51,6 +55,8 @@ export const allModels: MigratableModel[] = [
   Folder,
   FileObject,
   ClinicalDocument,
+  Clinic,
+  Appointment,
   Reminder,
   Organization,
   Practitioner,

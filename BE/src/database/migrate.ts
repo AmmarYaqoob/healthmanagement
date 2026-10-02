@@ -1,6 +1,10 @@
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import { logger } from '../config/logger';
 import { initialMigration } from './migrations/001_initial';
+import { clinicsMigration } from './migrations/002_clinics';
+import { appointmentsMigration } from './migrations/003_appointments';
+import { practitionerEmailMigration } from './migrations/004_practitioner_email';
+import { accessLogMigration } from './migrations/005_access_log';
 
 const MIGRATION_COLLECTION = 'schemaMigrations';
 
@@ -15,7 +19,13 @@ async function migrate(): Promise<void> {
   const applied = db.collection(MIGRATION_COLLECTION);
   await applied.createIndex({ id: 1 }, { unique: true });
 
-  const migrations = [initialMigration];
+  const migrations = [
+    initialMigration,
+    clinicsMigration,
+    appointmentsMigration,
+    practitionerEmailMigration,
+    accessLogMigration,
+  ];
 
   for (const migration of migrations) {
     const existing = await applied.findOne({ id: migration.id });

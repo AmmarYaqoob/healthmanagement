@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faCamera,
@@ -26,11 +26,18 @@ const ICONS = {
   folder: faFolder,
 };
 
-const emptyUpload = { name: '', type: 'Lab report', date: '2026-09-30', folder: 'laboratory' };
+const DOCUMENT_TYPES = [
+  { type: 'Laboratory', folder: 'laboratory' },
+  { type: 'Medication', folder: 'prescriptions' },
+  { type: 'Vaccination', folder: 'vaccination' },
+];
+
+const emptyUpload = { name: '', type: 'Laboratory', date: '2026-09-30', folder: 'laboratory' };
 
 export default function Documents() {
   const {
     documents, setDocuments, folders, setFolders, setRecentDocs, setAdded,
+    medications, labs, vaccines,
     pendingAction, clearAction, notify,
   } = useApp();
   const [folderId, setFolderId] = useState('all');
@@ -53,17 +60,51 @@ export default function Documents() {
     if (pendingAction) clearAction();
   }, [pendingAction, clearAction]);
 
+  const records = useMemo(() => [
+    ...documents.map((doc) => ({ ...doc, source: 'file' })),
+    ...medications.map((med) => ({
+      id: `med-${med.id}`,
+      name: med.name,
+      type: med.dosage ? `Medication · ${med.dosage}` : 'Medication',
+      date: med.start,
+      folder: 'prescriptions',
+      tone: med.tone,
+      icon: 'file',
+      source: 'medication',
+    })),
+    ...labs.map((lab) => ({
+      id: `lab-${lab.id}`,
+      name: lab.test,
+      type: [lab.result, lab.unit].filter(Boolean).join(' ') || 'Lab report',
+      date: lab.date,
+      folder: 'laboratory',
+      tone: 'red',
+      icon: 'flask',
+      source: 'laboratory',
+    })),
+    ...vaccines.map((vaccine) => ({
+      id: `vax-${vaccine.id}`,
+      name: vaccine.name,
+      type: vaccine.status ? `Vaccination · ${vaccine.status}` : 'Vaccination',
+      date: vaccine.date,
+      folder: 'vaccination',
+      tone: vaccine.tone,
+      icon: 'file',
+      source: 'vaccination',
+    })),
+  ], [documents, medications, labs, vaccines]);
+
   const current = folders.find((folder) => folder.id === folderId) || folders[0] || {
     id: 'all',
     name: 'All documents',
   };
-  const shown = documents.filter((doc) => {
+  const shown = records.filter((doc) => {
     if (folderId !== 'all' && doc.folder !== folderId) return false;
     return matches(query, doc.name, doc.type, doc.date);
   });
 
   const countFor = (folder) => (
-    documents.filter((doc) => folder.id === 'all' || doc.folder === folder.id).length
+    records.filter((doc) => folder.id === 'all' || doc.folder === folder.id).length
   );
 
   const addDocument = async (entry) => {
@@ -229,20 +270,29 @@ export default function Documents() {
             </label>
             <Field label="Name"><input className="input" value={upload.name} onChange={(event) => setUpload({ ...upload, name: event.target.value })} /></Field>
             <Field label="Type">
-              <select className="input" value={upload.type} onChange={(event) => setUpload({ ...upload, type: event.target.value })}>
-                <option>Lab report</option>
-                <option>Radiology</option>
-                <option>Prescription</option>
-                <option>Medical letter</option>
-                <option>Vaccination</option>
+              <select
+                className="input"
+                value={upload.type}
+                onChange={(event) => {
+                  const type = event.target.value;
+                  const match = DOCUMENT_TYPES.find((item) => item.type === type);
+                  setUpload({ ...upload, type, folder: match?.folder || upload.folder });
+                }}
+              >
+                {DOCUMENT_TYPES.map((item) => (
+                  <option key={item.type}>{item.type}</option>
+                ))}
               </select>
             </Field>
             <Field label="Date"><input className="input" type="date" value={upload.date} onChange={(event) => setUpload({ ...upload, date: event.target.value })} /></Field>
             <Field label="Folder">
               <select className="input" value={upload.folder} onChange={(event) => setUpload({ ...upload, folder: event.target.value })}>
-                {folders.filter((folder) => folder.id !== 'all').map((folder) => (
-                  <option key={folder.id} value={folder.id}>{folder.name}</option>
-                ))}
+                {DOCUMENT_TYPES.map((item) => {
+                  const folder = folders.find((entry) => entry.id === item.folder);
+                  return (
+                    <option key={item.folder} value={item.folder}>{folder?.name || item.type}</option>
+                  );
+                })}
               </select>
             </Field>
           </form>
@@ -256,7 +306,7 @@ export default function Documents() {
           hint="Photograph a record. Confirm the name and type before it is filed."
           fields={{
             Name: 'Scanned record.pdf',
-            Type: 'Medical letter',
+            Type: 'Laboratory',
             Date: '30 Sep 2026',
           }}
           onClose={() => setModal(null)}
@@ -264,7 +314,7 @@ export default function Documents() {
             name: values.Name,
             type: values.Type,
             date: values.Date,
-            folder: 'letters',
+            folder: DOCUMENT_TYPES.find((item) => item.type === values.Type)?.folder || 'laboratory',
             icon: 'pdf',
             tone: 'blue',
           })}

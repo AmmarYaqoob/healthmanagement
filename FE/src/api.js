@@ -41,6 +41,9 @@ const workspace = {
   documents: [],
   folders: [],
   directory: [],
+  clinics: [],
+  appointments: [],
+  organizationId: '',
 };
 
 let contextPromise = null;
@@ -183,12 +186,67 @@ function mapReminder(doc) {
   };
 }
 
+function ageLabel(value) {
+  if (!value) return '—';
+  const born = new Date(value);
+  if (Number.isNaN(born.getTime())) return '—';
+  const now = new Date();
+  let age = now.getFullYear() - born.getFullYear();
+  const month = now.getMonth() - born.getMonth();
+  if (month < 0 || (month === 0 && now.getDate() < born.getDate())) age -= 1;
+  return `${Math.max(age, 0)} years`;
+}
+
+async function digestToken(token) {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return [...new Uint8Array(bytes)].map((part) => part.toString(16).padStart(2, '0')).join('');
+}
+
+function reportSnapshot(types) {
+  const report = {
+    name: workspace.patient?.displayName || workspace.user?.name || 'Patient',
+    age: ageLabel(workspace.patient?.dateOfBirth),
+    generated: displayDate(new Date().toISOString()),
+  };
+  if (types.includes('medication')) {
+    const line = (row) => ({
+      name: row.name,
+      dosage: row.dosage,
+      schedule: row.schedule,
+      start: row.start,
+    });
+    report.active = workspace.medications.filter((row) => row.status === 'Active').map(line);
+    report.past = workspace.medications.filter((row) => row.status !== 'Active').map(line);
+  }
+  if (types.includes('laboratory')) {
+    report.labs = workspace.labs.map((row) => ({
+      test: row.test,
+      result: row.result,
+      unit: row.unit,
+      range: row.range,
+      date: row.date,
+      source: row.source,
+    }));
+  }
+  if (types.includes('vaccination')) {
+    report.vaccines = workspace.vaccines.map((row) => ({
+      name: row.name,
+      date: row.date,
+      next: row.next,
+      status: row.status,
+      tone: row.tone,
+    }));
+  }
+  return report;
+}
+
 function mapShare(doc) {
   return {
     id: doc._id,
     name: doc.granteeSnapshot?.name || 'Shared access',
     role: doc.granteeSnapshot?.role || '',
     until: displayDate(doc.expiresAt),
+    singleUse: Boolean(doc.singleUse),
     tone: doc.granteeType === 'organization' ? 'teal' : 'blue',
   };
 }
@@ -281,6 +339,68 @@ export async function loadDocuments() {
   };
 }
 
+function padTime(value) {
+  return String(value).padStart(2, '0');
+}
+
+function dateInputValue(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return `${parsed.getFullYear()}-${padTime(parsed.getMonth() + 1)}-${padTime(parsed.getDate())}`;
+}
+
+function timeInputValue(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return `${padTime(parsed.getHours())}:${padTime(parsed.getMinutes())}`;
+}
+
+function formatAppointmentWhen(startsAt, endsAt) {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  if (Number.isNaN(start.getTime())) return '';
+  const date = start.toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+  const startTime = start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const endTime = Number.isNaN(end.getTime())
+    ? ''
+    : end.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return endTime ? `${date} · ${startTime}–${endTime}` : `${date} · ${startTime}`;
+}
+
+function mapAppointment(doc) {
+  const end = new Date(doc.endsAt);
+  let status = 'Upcoming';
+  if (doc.status === 'cancelled') status = 'Cancelled';
+  else if (!Number.isNaN(end.getTime()) && end.getTime() < Date.now()) status = 'Past';
+
+  return {
+    id: doc._id,
+    title: doc.title,
+    location: doc.location || '',
+    description: doc.description || '',
+    startsAt: doc.startsAt,
+    endsAt: doc.endsAt,
+    when: formatAppointmentWhen(doc.startsAt, doc.endsAt),
+    date: dateInputValue(doc.startsAt),
+    startTime: timeInputValue(doc.startsAt),
+    endTime: timeInputValue(doc.endsAt),
+    status,
+    notifiedAt: doc.notifiedAt || null,
+  };
+}
+
+export async function loadAppointments() {
+  const query = await patientQuery();
+  const docs = await request(`/appointments?${query}&sort=startsAt`);
+  workspace.appointments = (docs || []).map(mapAppointment);
+  return workspace.appointments;
+}
+
 export async function loadReminders() {
   const query = await patientQuery();
   const docs = await request(`/reminders?${query}&status=scheduled`);
@@ -298,25 +418,87 @@ export async function loadShares() {
 
 export async function loadDirectory() {
   await ensureContext();
-  const [practitioners, organizations] = await Promise.all([
+  const [practitioners, clinics] = await Promise.all([
     request('/practitioners?limit=100&active=true'),
-    request('/organizations?limit=100&active=true'),
+    request('/clinics?limit=100&active=true'),
   ]);
-  workspace.directory = [
-    ...(practitioners || []).map((person) => ({
-      id: person._id,
-      kind: 'practitioner',
-      name: person.name,
-      role: person.role,
-    })),
-    ...(organizations || []).map((org) => ({
-      id: org._id,
-      kind: 'organization',
-      name: org.name,
-      role: { hospital: 'Hospital', laboratory: 'Laboratory', practice: 'Practice' }[org.kind] || 'Practice',
-    })),
-  ];
-  return workspace.directory;
+  workspace.clinics = (clinics || [])
+    .map((clinic) => ({
+      id: clinic._id,
+      name: clinic.name,
+      district: clinic.district || '',
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  workspace.directory = (practitioners || []).map((person) => ({
+    id: person._id,
+    kind: 'practitioner',
+    name: person.name,
+    email: person.email || '',
+    role: person.role,
+    clinicId: person.clinicId || '',
+  }));
+  return { directory: workspace.directory, clinics: workspace.clinics };
+}
+
+function mapPractitioner(doc) {
+  return {
+    id: doc._id,
+    kind: 'practitioner',
+    name: doc.name,
+    email: doc.email || '',
+    role: doc.role,
+    clinicId: doc.clinicId || '',
+  };
+}
+
+async function defaultOrganizationId() {
+  if (workspace.organizationId) return workspace.organizationId;
+  const organizations = await request('/organizations?limit=1&active=true');
+  workspace.organizationId = organizations?.[0]?._id || '';
+  return workspace.organizationId;
+}
+
+export async function createClinic({ name, district }) {
+  await ensureContext();
+  const doc = await request('/clinics', {
+    method: 'POST',
+    body: JSON.stringify({ name, district, active: true }),
+  });
+  const clinic = {
+    id: doc._id,
+    name: doc.name,
+    district: doc.district || '',
+  };
+  workspace.clinics = [...workspace.clinics.filter((item) => item.id !== clinic.id), clinic]
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return clinic;
+}
+
+export async function createPractitioner({ name, email, role, clinicId }) {
+  await ensureContext();
+  const organizationId = await defaultOrganizationId();
+  if (!organizationId) {
+    throw new Error('No organization is available to attach this practitioner.');
+  }
+  const doc = await request('/practitioners', {
+    method: 'POST',
+    body: JSON.stringify({
+      organizationId,
+      clinicId,
+      name,
+      email,
+      role,
+      active: true,
+    }),
+  });
+  const person = mapPractitioner(doc);
+  workspace.directory = [...workspace.directory.filter((item) => item.id !== person.id), person];
+  return person;
+}
+
+export async function deletePractitioner(id) {
+  await request(`/practitioners/${id}`, { method: 'DELETE' });
+  workspace.directory = workspace.directory.filter((item) => item.id !== id);
 }
 
 export async function loadPage(page) {
@@ -347,11 +529,17 @@ export async function loadPage(page) {
   }
 
   if (page === 'documents') {
-    return { profile, ...(await loadDocuments()) };
+    const [documents, medications, labs, vaccines] = await Promise.all([
+      loadDocuments(),
+      loadMedications(),
+      loadLabs(),
+      loadVaccines(),
+    ]);
+    return { profile, ...documents, medications, labs, vaccines };
   }
 
   if (page === 'sharing') {
-    const [shares, directory, medications, labs, vaccines, documents] = await Promise.all([
+    const [shares, roster, medications, labs, vaccines, documents] = await Promise.all([
       loadShares(),
       loadDirectory(),
       loadMedications(),
@@ -359,12 +547,30 @@ export async function loadPage(page) {
       loadVaccines(),
       loadDocuments(),
     ]);
-    return { profile, shares, directory, medications, labs, vaccines, ...documents };
+    return {
+      profile,
+      shares,
+      directory: roster.directory,
+      clinics: roster.clinics,
+      medications,
+      labs,
+      vaccines,
+      ...documents,
+    };
+  }
+
+  if (page === 'appointment') {
+    return { profile, appointments: await loadAppointments() };
   }
 
   if (page === 'settings') {
     await ensureContext();
     return { profile: profileFromContext() };
+  }
+
+  if (page === 'admin') {
+    const roster = await loadDirectory();
+    return { profile, directory: roster.directory, clinics: roster.clinics };
   }
 
   return { profile };
@@ -393,6 +599,14 @@ export async function createMedication(entry) {
   const mapped = mapMedication(doc, workspace.medications.length);
   workspace.medications = [mapped, ...workspace.medications];
   return mapped;
+}
+
+export async function extractLabReport(file) {
+  return request('/lab-results/extract', {
+    method: 'POST',
+    body: file,
+    headers: { 'Content-Type': 'application/pdf' },
+  });
 }
 
 export async function createLab(entry) {
@@ -561,9 +775,10 @@ export async function moveDocuments(ids, folderSlug) {
   })));
 }
 
-export async function createShare({ person, days, allowDownload, types }) {
+export async function createShare({ person, days, allowDownload, types, singleUse = false }) {
   requireWorkspace();
-  const known = workspace.directory.find((item) => item.name === person.name);
+  const known = workspace.directory.find((item) => item.id && item.id === person.id)
+    || workspace.directory.find((item) => item.name === person.name);
   const items = types.flatMap((type) => {
     const resourceType = SHARE_TYPES[type];
     const source = {
@@ -571,9 +786,10 @@ export async function createShare({ person, days, allowDownload, types }) {
       laboratory: workspace.labs,
       vaccination: workspace.vaccines,
       documents: workspace.documents,
-    }[type];
-    const record = source?.[0];
-    return resourceType && record ? [{ resourceType, resourceId: record.id }] : [];
+    }[type] || [];
+    return source
+      .filter((record) => resourceType && record.id)
+      .map((record) => ({ resourceType, resourceId: record.id }));
   });
 
   if (items.length === 0) {
@@ -581,40 +797,47 @@ export async function createShare({ person, days, allowDownload, types }) {
   }
 
   const token = crypto.randomUUID().replace(/-/g, '');
+  const tokenHash = await digestToken(token);
   const expiresAt = new Date();
   expiresAt.setUTCDate(expiresAt.getUTCDate() + days);
   const doc = await request('/access-grants', {
     method: 'POST',
     body: JSON.stringify({
       patientId: workspace.patientId,
-      tokenHash: token,
+      tokenHash,
+      report: reportSnapshot(types),
       granteeType: known?.kind || 'practitioner',
       ...(known?.kind === 'organization' ? { granteeOrganizationId: known.id } : {}),
       ...(known?.kind === 'practitioner' ? { granteePractitionerId: known.id } : {}),
       granteeSnapshot: { name: person.name, role: person.role },
       items,
       allowDownload,
+      singleUse,
       expiresAt: expiresAt.toISOString(),
       status: 'active',
       createdBy: workspace.userId,
     }),
   });
 
-  await request('/access-events', {
-    method: 'POST',
-    body: JSON.stringify({
-      grantId: doc._id,
-      patientId: workspace.patientId,
-      type: 'created',
-      actorUserId: workspace.userId,
-      occurredAt: new Date().toISOString(),
-    }),
-  }).catch(() => undefined);
-
   return {
     share: mapShare(doc),
-    link: `https://healthpassport.app/s/${token.slice(0, 8)}`,
+    link: `${window.location.origin}/s/${token}`,
   };
+}
+
+const reportLoads = new Map();
+
+export function loadReport(token) {
+  if (!reportLoads.has(token)) {
+    reportLoads.set(
+      token,
+      request(`/reports/${encodeURIComponent(token)}`).catch((error) => {
+        reportLoads.delete(token);
+        throw error;
+      }),
+    );
+  }
+  return reportLoads.get(token);
 }
 
 export async function revokeShare(id) {
@@ -627,16 +850,80 @@ export async function revokeShare(id) {
       revokedBy: workspace.userId,
     }),
   });
-  await request('/access-events', {
+}
+
+function appointmentBody(entry) {
+  const startsAt = new Date(`${entry.date}T${entry.startTime}`);
+  let endsAt = new Date(`${entry.date}T${entry.endTime}`);
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    throw new Error('Enter a date, start time, and end time.');
+  }
+  if (endsAt <= startsAt) {
+    const nextDay = new Date(endsAt.getTime() + 24 * 60 * 60 * 1000);
+    const gap = nextDay.getTime() - startsAt.getTime();
+    if (gap <= 12 * 60 * 60 * 1000) endsAt = nextDay;
+    else throw new Error('End time must be after the start time.');
+  }
+
+  return {
+    title: entry.title.trim(),
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt.toISOString(),
+    location: entry.location.trim(),
+    description: entry.description.trim(),
+    status: 'upcoming',
+  };
+}
+
+export async function createAppointment(entry) {
+  requireWorkspace();
+  const doc = await request('/appointments', {
     method: 'POST',
     body: JSON.stringify({
-      grantId: id,
       patientId: workspace.patientId,
-      type: 'revoked',
-      actorUserId: workspace.userId,
-      occurredAt: new Date().toISOString(),
+      ...appointmentBody(entry),
     }),
-  }).catch(() => undefined);
+  });
+  const mapped = mapAppointment(doc);
+  workspace.appointments = [...workspace.appointments, mapped].sort(
+    (left, right) => new Date(left.startsAt) - new Date(right.startsAt),
+  );
+  return mapped;
+}
+
+export async function updateAppointment(id, entry) {
+  requireWorkspace();
+  const doc = await request(`/appointments/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(appointmentBody(entry)),
+  });
+  const mapped = mapAppointment(doc);
+  workspace.appointments = workspace.appointments
+    .map((item) => (item.id === id ? mapped : item))
+    .sort((left, right) => new Date(left.startsAt) - new Date(right.startsAt));
+  return mapped;
+}
+
+export async function cancelAppointment(id) {
+  requireWorkspace();
+  const doc = await request(`/appointments/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'cancelled' }),
+  });
+  const mapped = mapAppointment(doc);
+  workspace.appointments = workspace.appointments.map((item) => (item.id === id ? mapped : item));
+  return mapped;
+}
+
+export async function markAppointmentNotified(id) {
+  requireWorkspace();
+  const doc = await request(`/appointments/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ notifiedAt: new Date().toISOString() }),
+  });
+  const mapped = mapAppointment(doc);
+  workspace.appointments = workspace.appointments.map((item) => (item.id === id ? mapped : item));
+  return mapped;
 }
 
 export async function saveSettings(profile) {

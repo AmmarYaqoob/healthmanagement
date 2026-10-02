@@ -5,7 +5,6 @@ import {
   faFolder,
   faInbox,
   faLink,
-  faMagnifyingGlass,
   faPills,
   faShieldHalved,
   faSyringe,
@@ -27,6 +26,7 @@ const DURATIONS = [
   { label: '7 days', days: 7 },
   { label: '30 days', days: 30 },
   { label: '90 days', days: 90 },
+  { label: 'Single use', singleUse: true },
 ];
 
 function initials(name) {
@@ -34,30 +34,36 @@ function initials(name) {
 }
 
 export default function Sharing() {
-  const { shares, setShares, directory, notify } = useApp();
+  const { shares, setShares, directory, clinics, notify } = useApp();
   const [tab, setTab] = useState('professionals');
   const [selected, setSelected] = useState(['medication', 'laboratory', 'documents']);
-  const [recipientQuery, setRecipientQuery] = useState('');
-  const [recipients, setRecipients] = useState([{ name: 'Dr. Julia Schneider', role: 'General Practitioner' }]);
+  const [clinicId, setClinicId] = useState('');
+  const [practitionerId, setPractitionerId] = useState('');
+  const [recipients, setRecipients] = useState([]);
   const [duration, setDuration] = useState('7 days');
   const [allowDownload, setAllowDownload] = useState(false);
   const [link, setLink] = useState('');
   const [error, setError] = useState('');
   const [revokeId, setRevokeId] = useState(null);
-  const [suggestOpen, setSuggestOpen] = useState(false);
 
-  const suggestions = useMemo(() => {
-    const needle = recipientQuery.trim().toLowerCase();
-    if (!needle) return [];
-    return directory.filter((person) => (
-      person.name.toLowerCase().includes(needle) && !recipients.some((item) => item.name === person.name)
-    ));
-  }, [recipientQuery, recipients]);
+  const clinicPractitioners = useMemo(() => {
+    if (!clinicId) return [];
+    return directory
+      .filter((person) => person.kind === 'practitioner' && person.clinicId === clinicId)
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [directory, clinicId]);
 
-  const addRecipient = (person) => {
-    setRecipients((current) => [...current, person]);
-    setRecipientQuery('');
-    setSuggestOpen(false);
+  const chooseClinic = (id) => {
+    setClinicId(id);
+    setPractitionerId('');
+  };
+
+  const choosePractitioner = (id) => {
+    setPractitionerId(id);
+    const person = clinicPractitioners.find((item) => item.id === id);
+    if (!person) return;
+    setRecipients((current) => (current.some((item) => item.id === person.id) ? current : [...current, person]));
   };
 
   const generate = async () => {
@@ -69,11 +75,17 @@ export default function Sharing() {
       setError('Choose a recipient.');
       return;
     }
-    const days = DURATIONS.find((item) => item.label === duration)?.days || 7;
+    const choice = DURATIONS.find((item) => item.label === duration) || DURATIONS[1];
     try {
       const created = [];
       for (const person of recipients) {
-        created.push(await createShare({ person, days, allowDownload, types: selected }));
+        created.push(await createShare({
+          person,
+          days: choice.days || 7,
+          singleUse: Boolean(choice.singleUse),
+          allowDownload,
+          types: selected,
+        }));
       }
       setShares((current) => [...created.map((item) => item.share).reverse(), ...current]);
       setLink(created[0]?.link || '');
@@ -156,46 +168,47 @@ export default function Sharing() {
                 <span className="step-num">2</span>
                 <div>
                   <h2>Choose recipient</h2>
-                  <p>Healthcare professional or organization.</p>
+                  <p>Select a clinic, then a practitioner at that clinic.</p>
                 </div>
               </div>
-              <div className="recipient-search">
-                <label className="mini-search">
-                  <FontAwesomeIcon icon={faMagnifyingGlass} />
-                  <span className="sr-only">Search by name or organization</span>
-                  <input
-                    value={recipientQuery}
-                    placeholder="Search by name or organization"
-                    onChange={(event) => { setRecipientQuery(event.target.value); setSuggestOpen(true); }}
-                    onFocus={() => setSuggestOpen(true)}
-                  />
-                </label>
-                {suggestOpen && recipientQuery.trim() && (
-                  <div className="menu suggest">
-                    {suggestions.map((person) => (
-                      <button type="button" key={person.name} onClick={() => addRecipient(person)}>
-                        <strong>{person.name}</strong>
-                        <span>{person.role}</span>
-                      </button>
+              <div className="recipient-picks">
+                <Field label="Clinic">
+                  <select value={clinicId} onChange={(event) => chooseClinic(event.target.value)}>
+                    <option value="">Select a clinic</option>
+                    {clinics.map((clinic) => (
+                      <option key={clinic.id} value={clinic.id}>
+                        {clinic.district ? `${clinic.name} · ${clinic.district}` : clinic.name}
+                      </option>
                     ))}
-                    {suggestions.length === 0 && (
-                      <button type="button" onClick={() => addRecipient({ name: recipientQuery.trim(), role: 'Healthcare professional' })}>
-                        <strong>Add “{recipientQuery.trim()}”</strong>
-                        <span>New recipient</span>
-                      </button>
-                    )}
-                  </div>
-                )}
+                  </select>
+                </Field>
+                <Field label="Practitioner">
+                  <select
+                    value={practitionerId}
+                    disabled={!clinicId}
+                    onChange={(event) => choosePractitioner(event.target.value)}
+                  >
+                    <option value="">{clinicId ? 'Select a practitioner' : 'Select a clinic first'}</option>
+                    {clinicPractitioners.map((person) => (
+                      <option key={person.id} value={person.id}>
+                        {person.name} · {person.role}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
               </div>
               <div className="recipient-list">
                 {recipients.map((person) => (
-                  <div className="recipient" key={person.name}>
+                  <div className="recipient" key={person.id || person.name}>
                     <span className="initials blue">{initials(person.name)}</span>
                     <div>
                       <strong>{person.name}</strong>
                       <span>{person.role}</span>
                     </div>
-                    <button type="button" className="icon-btn" aria-label={`Remove ${person.name}`} onClick={() => setRecipients((current) => current.filter((item) => item.name !== person.name))}>
+                    <button type="button" className="icon-btn" aria-label={`Remove ${person.name}`} onClick={() => {
+                      setRecipients((current) => current.filter((item) => item.id !== person.id));
+                      if (practitionerId === person.id) setPractitionerId('');
+                    }}>
                       <FontAwesomeIcon icon={faXmark} />
                     </button>
                   </div>
@@ -226,7 +239,7 @@ export default function Sharing() {
               {error && <p className="form-error">{error}</p>}
               {link && (
                 <div className="link-box">
-                  <code>{link}</code>
+                  <a href={link}>{link}</a>
                   <Button variant="ghost" onClick={copyLink}>Copy</Button>
                 </div>
               )}
@@ -253,7 +266,7 @@ export default function Sharing() {
                       <div>
                         <strong>{share.name}</strong>
                         <span className="share-meta">{share.role}</span>
-                        <span className="share-meta">Valid until {share.until}</span>
+                        <span className="share-meta">{share.singleUse ? 'Single use' : `Valid until ${share.until}`}</span>
                       </div>
                       <button type="button" className="linkish danger" onClick={() => setRevokeId(share.id)}>Revoke</button>
                     </li>

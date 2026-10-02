@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faCamera,
   faMagnifyingGlass,
   faNotesMedical,
   faPills,
+  faFileLines,
   faPlus,
   faUpload,
 } from '@fortawesome/free-solid-svg-icons';
@@ -19,6 +21,7 @@ const TONES = ['blue', 'green', 'orange', 'purple', 'red'];
 const emptyForm = { name: '', dosage: '', schedule: '', start: '2026-09-30', status: 'Active' };
 
 export default function Medication() {
+  const navigate = useNavigate();
   const { medications, setMedications, setAdded, pendingAction, clearAction, notify } = useApp();
   const [tab, setTab] = useState('All');
   const [query, setQuery] = useState('');
@@ -113,6 +116,7 @@ export default function Medication() {
         text="Manage your medication information. Add manually, scan prescriptions or upload medication plans and pharmacy documents. The system will extract relevant fields and ask you to confirm them."
         actions={(
           <>
+            <Button variant="ghost" icon={faFileLines} onClick={() => navigate('/medication/report')}>View report</Button>
             <Button icon={faPlus} onClick={() => { setEditing(null); setForm(emptyForm); setError(''); setModal('add'); }}>Add manually</Button>
             <Button variant="ghost" icon={faCamera} onClick={() => setModal('scan')}>Scan prescription</Button>
             <Button variant="ghost" icon={faUpload} onClick={() => setModal('upload')}>Upload document</Button>

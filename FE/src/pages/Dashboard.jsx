@@ -147,6 +147,9 @@ export default function Dashboard() {
             <button type="button" className="action" onClick={() => openPage('medication', 'scan')}>
               <Tile small tone="teal" icon={faCamera} /> Scan prescription
             </button>
+            <button type="button" className="action" onClick={() => openPage('appointment', 'add')}>
+              <Tile small tone="orange" icon={faCalendarDays} /> Add appointment
+            </button>
             <button type="button" className="action" onClick={() => setSummaryOpen(true)}>
               <Tile small tone="green" icon={faClipboardList} /> View summary
             </button>

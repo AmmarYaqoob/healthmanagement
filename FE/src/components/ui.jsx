@@ -33,7 +33,7 @@ export function PageIntro({ title, text, actions }) {
   );
 }
 
-export function Modal({ title, subtitle, onClose, children, footer }) {
+export function Modal({ title, subtitle, onClose, children, footer, wide = false }) {
   useEffect(() => {
     const onKey = (event) => {
       if (event.key === 'Escape') onClose();
@@ -49,7 +49,7 @@ export function Modal({ title, subtitle, onClose, children, footer }) {
   return (
     <div className="modal-root">
       <button type="button" className="modal-backdrop" aria-label="Close dialog" onClick={onClose} />
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div className={wide ? 'modal wide' : 'modal'} role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <header className="modal-head">
           <div>
             <h2 id="modal-title">{title}</h2>

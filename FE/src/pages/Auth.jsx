@@ -64,6 +64,8 @@ export default function Auth({ onLogin }) {
   const purpose = params.get('purpose') === 'reset' ? 'reset' : 'signup';
   const note = location.state?.note || '';
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
   const screen = location.pathname;
 
   useEffect(() => {
@@ -81,13 +83,32 @@ export default function Auth({ onLogin }) {
         <Brand />
 
         {screen === '/login' && (
-          <form className="auth-form" onSubmit={(event) => { event.preventDefault(); onLogin(); }}>
+          <form
+            className="auth-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (onLogin(email)) return;
+              setError('That email is not recognized.');
+            }}
+          >
             <h1>Welcome back</h1>
             <p className="lede">Log in to your HealthPassport.</p>
             {note && <p className="auth-note">{note}</p>}
             <Field label="Email">
-              <input className="input" type="email" placeholder="anna.miller@email.com" autoComplete="email" />
+              <input
+                className="input"
+                type="email"
+                placeholder="you@healthpassport.com"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setError('');
+                }}
+                required
+              />
             </Field>
+            {error && <p className="form-error">{error}</p>}
             <Field label="Password">
               <input className="input" type="password" placeholder="Enter your password" autoComplete="current-password" />
             </Field>
@@ -147,7 +168,7 @@ export default function Auth({ onLogin }) {
             onSubmit={(event) => {
               event.preventDefault();
               if (purpose === 'reset') navigate('/reset-password');
-              else onLogin();
+              else navigate('/login', { state: { note: 'Account created. Log in with your email to continue.' } });
             }}
           >
             <h1>Enter your email key</h1>

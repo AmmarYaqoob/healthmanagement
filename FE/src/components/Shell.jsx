@@ -4,6 +4,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBell } from '@fortawesome/free-regular-svg-icons';
 import {
   faBars,
+  faCalendarDays,
   faChevronDown,
   faFlask,
   faFolder,
@@ -17,10 +18,12 @@ import {
   faSyringe,
   faUser,
 } from '@fortawesome/free-solid-svg-icons';
+import { appointmentInNoticeWindow, appointmentLead } from '../data';
 import { useApp } from '../App';
 
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: faHouse },
+  { id: 'appointment', label: 'Appointments', icon: faCalendarDays },
   { id: 'medication', label: 'Medication', icon: faPills },
   { id: 'laboratory', label: 'Laboratory', icon: faFlask },
   { id: 'vaccination', label: 'Vaccination', icon: faSyringe },
@@ -54,7 +57,7 @@ function Logo() {
 export default function Shell({ children }) {
   const {
     page, openPage, logout, menuOpen, setMenuOpen,
-    medications, labs, vaccines, documents, recentDocs, reminders, profile,
+    medications, labs, vaccines, documents, recentDocs, reminders, appointments, profile,
   } = useApp();
   const [query, setQuery] = useState('');
   const [panel, setPanel] = useState(null);
@@ -72,12 +75,13 @@ export default function Shell({ children }) {
       ...labs.map((item) => ({ title: item.test, meta: 'Laboratory', page: 'laboratory' })),
       ...vaccines.map((item) => ({ title: item.name, meta: 'Vaccination', page: 'vaccination' })),
       ...documents.map((item) => ({ title: item.name, meta: 'Document', page: 'documents' })),
+      ...appointments.map((item) => ({ title: item.title, meta: 'Appointment', page: 'appointment' })),
       ...recentDocs.map((item) => ({ title: item.title, meta: 'Document', page: 'documents' })),
       ...NAV.map((item) => ({ title: item.label, meta: 'Page', page: item.id })),
       { title: 'Settings', meta: 'Page', page: 'settings' },
     ];
     return items.filter((item) => item.title.toLowerCase().includes(needle)).slice(0, 7);
-  }, [query, medications, labs, vaccines, documents, recentDocs]);
+  }, [query, medications, labs, vaccines, documents, recentDocs, appointments]);
 
   const closePanels = () => setPanel(null);
 
@@ -153,6 +157,20 @@ export default function Shell({ children }) {
           </button>
           {panel === 'bell' && (
             <div className="menu notif-menu">
+              {appointments.some((item) => appointmentInNoticeWindow(item)) && (
+                <>
+                  <p className="menu-label">Appointment alerts</p>
+                  {appointments.filter((item) => appointmentInNoticeWindow(item)).map((item) => (
+                    <button type="button" key={item.id} onClick={() => openPage('appointment')}>
+                      <strong>{item.title}</strong>
+                      <span>
+                        {appointmentLead(item.startsAt)}
+                        {item.location ? ` · ${item.location}` : ''}
+                      </span>
+                    </button>
+                  ))}
+                </>
+              )}
               <p className="menu-label">Upcoming reminders</p>
               {reminders.map((item) => (
                 <button type="button" key={item.id} onClick={() => openPage('dashboard')}>

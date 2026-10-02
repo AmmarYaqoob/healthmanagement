@@ -1,16 +1,27 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { loadPage } from './api';
-import { pageMeta } from './data';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faHeartPulse, faRightFromBracket } from '@fortawesome/free-solid-svg-icons';
+import { loadAppointments, loadPage, markAppointmentNotified } from './api';
+import { clearSession, homeFor, readSession, writeSession } from './accounts';
+import { appointmentLead, appointmentNoticeDue, pageMeta } from './data';
 import Shell from './components/Shell';
 import Dashboard from './pages/Dashboard';
 import Medication from './pages/Medication';
+import MedicationReport from './pages/MedicationReport';
+import SharedReport from './pages/SharedReport';
 import Laboratory from './pages/Laboratory';
 import Vaccination from './pages/Vaccination';
 import Documents from './pages/Documents';
 import Sharing from './pages/Sharing';
 import Settings from './pages/Settings';
+import Admin from './pages/Admin';
+import Appointment from './pages/Appointment';
 import Auth from './pages/Auth';
+import DoctorLayout from './doctor/DoctorLayout';
+import DoctorDashboard from './pages/doctor/Dashboard';
+import DoctorPatients from './pages/doctor/Patients';
+import DoctorAppointments from './pages/doctor/Appointments';
 
 const AppContext = createContext(null);
 
@@ -25,19 +36,80 @@ const pages = {
   vaccination: Vaccination,
   documents: Documents,
   sharing: Sharing,
+  appointment: Appointment,
   settings: Settings,
 };
 
 function pageFromPath(pathname) {
   const id = pathname.replace(/^\//, '');
+  if (id === 'admin') return id;
   return Object.prototype.hasOwnProperty.call(pages, id) ? id : null;
+}
+
+function showAppointmentNotification(item, label) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const where = item.location ? ` at ${item.location}` : '';
+  try {
+    const notification = new Notification(item.title, { body: `Starts ${label}${where}` });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+  } catch {
+    // This browser blocked the notification.
+  }
+}
+
+function MedicationReportPage() {
+  return <MedicationReport />;
+}
+
+function AdminPage() {
+  const { loadedPage, logout } = useApp();
+  return (
+    <div className="admin-app">
+      <header className="topbar admin-topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            <FontAwesomeIcon icon={faHeartPulse} />
+          </span>
+          <span className="brand-name">HealthPassport</span>
+        </div>
+        <button type="button" className="admin-signout" onClick={logout}>
+          <FontAwesomeIcon icon={faRightFromBracket} />
+          Sign out
+        </button>
+      </header>
+      <main className="admin-screen">
+        {loadedPage === 'admin' ? <Admin /> : <p className="empty-note">Loading…</p>}
+      </main>
+    </div>
+  );
+}
+
+function Gate({ area, children }) {
+  const { session } = useApp();
+  if (!session) return <Navigate to="/login" replace />;
+  if (session.role !== area) return <Navigate to={homeFor(session)} replace />;
+  return children;
+}
+
+function HomeRedirect() {
+  const { session } = useApp();
+  return <Navigate to={homeFor(session)} replace />;
+}
+
+function AuthRoute() {
+  const { session, login } = useApp();
+  if (session) return <Navigate to={homeFor(session)} replace />;
+  return <Auth onLogin={login} />;
 }
 
 function AppPage() {
   const { pageId } = useParams();
-  const { loadedPage } = useApp();
+  const { loadedPage, session } = useApp();
   const Page = pages[pageId];
-  if (!Page) return <Navigate to="/dashboard" replace />;
+  if (!Page) return <Navigate to={homeFor(session)} replace />;
 
   return (
     <Shell>
@@ -62,11 +134,14 @@ export default function App() {
   const [shares, setShares] = useState([]);
   const [recentDocs, setRecentDocs] = useState([]);
   const [reminders, setReminders] = useState([]);
+  const [appointments, setAppointments] = useState([]);
   const [directory, setDirectory] = useState([]);
+  const [clinics, setClinics] = useState([]);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadedPage, setLoadedPage] = useState(null);
   const [added, setAdded] = useState({ meds: 0, labs: 0, docs: 0 });
+  const [session, setSession] = useState(() => readSession());
 
   const notify = useCallback((message) => setToast(message), []);
 
@@ -84,14 +159,19 @@ export default function App() {
     }, { replace: true });
   }, [setSearchParams]);
 
-  const login = useCallback(() => {
-    const from = location.state?.from?.pathname;
-    navigate(from && pageFromPath(from) ? from : '/dashboard', { replace: true });
-  }, [location.state, navigate]);
+  const login = useCallback((email) => {
+    const next = writeSession(email);
+    if (!next) return false;
+    setSession(next);
+    navigate(homeFor(next), { replace: true });
+    return true;
+  }, [navigate]);
 
   const logout = useCallback(() => {
+    clearSession();
+    setSession(null);
     setMenuOpen(false);
-    navigate('/login');
+    navigate('/login', { replace: true });
   }, [navigate]);
 
   useEffect(() => {
@@ -100,7 +180,8 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
-    if (!page) return undefined;
+    const canLoad = session && (page === 'admin' ? session.role === 'admin' : session.role === 'patient');
+    if (!page || !canLoad) return undefined;
 
     let ignore = false;
     setLoading(true);
@@ -115,8 +196,10 @@ export default function App() {
         if (data.folders) setFolders(data.folders);
         if (data.recentDocs) setRecentDocs(data.recentDocs);
         if (data.reminders) setReminders(data.reminders);
+        if (data.appointments) setAppointments(data.appointments);
         if (data.shares) setShares(data.shares);
         if (data.directory) setDirectory(data.directory);
+        if (data.clinics) setClinics(data.clinics);
         setLoadedPage(page);
       })
       .catch((error) => {
@@ -132,7 +215,42 @@ export default function App() {
     return () => {
       ignore = true;
     };
-  }, [page, notify]);
+  }, [page, session, notify]);
+
+  const noticeRequest = useRef(0);
+  const firingNotices = useRef(new Set());
+
+  const refreshAppointmentNotices = useCallback(async () => {
+    const requestId = noticeRequest.current + 1;
+    noticeRequest.current = requestId;
+    try {
+      const list = await loadAppointments();
+      if (noticeRequest.current !== requestId) return;
+      setAppointments(list);
+      const due = list.filter((item) => appointmentNoticeDue(item));
+      for (const item of due) {
+        if (firingNotices.current.has(item.id)) continue;
+        firingNotices.current.add(item.id);
+        const label = appointmentLead(item.startsAt);
+        notify(`${item.title} is ${label}`);
+        showAppointmentNotification(item, label);
+        try {
+          await markAppointmentNotified(item.id);
+        } catch {
+          firingNotices.current.delete(item.id);
+        }
+      }
+    } catch {
+      // Page loading already reports when the API is unreachable.
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    if (!session || session.role !== 'patient' || !page || loadedPage !== page) return undefined;
+    refreshAppointmentNotices();
+    const timer = setInterval(refreshAppointmentNotices, 30000);
+    return () => clearInterval(timer);
+  }, [page, loadedPage, session, refreshAppointmentNotices]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -168,30 +286,47 @@ export default function App() {
     recentDocs,
     setRecentDocs,
     reminders,
+    appointments,
+    setAppointments,
+    refreshAppointmentNotices,
     directory,
+    setDirectory,
+    clinics,
+    setClinics,
     profile,
     setProfile,
     loading,
     loadedPage,
     added,
     setAdded,
+    session,
+    login,
   }), [
     page, openPage, notify, logout, menuOpen, pendingAction, clearAction,
     medications, labs, vaccines, documents, folders, shares, recentDocs,
-    reminders, directory, profile, loading, loadedPage, added,
+    reminders, appointments, refreshAppointmentNotices, directory, clinics, profile, loading, loadedPage, added,
+    session, login,
   ]);
 
   return (
     <AppContext.Provider value={value}>
       <Routes>
-        <Route path="/login" element={<Auth onLogin={login} />} />
-        <Route path="/signup" element={<Auth onLogin={login} />} />
-        <Route path="/forgot-password" element={<Auth onLogin={login} />} />
-        <Route path="/verify-email" element={<Auth onLogin={login} />} />
-        <Route path="/reset-password" element={<Auth onLogin={login} />} />
-        <Route path="/:pageId" element={<AppPage />} />
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/login" element={<AuthRoute />} />
+        <Route path="/signup" element={<AuthRoute />} />
+        <Route path="/forgot-password" element={<AuthRoute />} />
+        <Route path="/verify-email" element={<AuthRoute />} />
+        <Route path="/reset-password" element={<AuthRoute />} />
+        <Route path="/s/:token" element={<SharedReport />} />
+        <Route path="/medication/report" element={<MedicationReportPage />} />
+        <Route path="/admin" element={<Gate area="admin"><AdminPage /></Gate>} />
+        <Route path="/doctor" element={<Gate area="doctor"><DoctorLayout /></Gate>}>
+          <Route index element={<DoctorDashboard />} />
+          <Route path="patients" element={<DoctorPatients />} />
+          <Route path="appointments" element={<DoctorAppointments />} />
+        </Route>
+        <Route path="/:pageId" element={<Gate area="patient"><AppPage /></Gate>} />
+        <Route path="/" element={<HomeRedirect />} />
+        <Route path="*" element={<HomeRedirect />} />
       </Routes>
       {toast && <div className="toast" role="status">{toast}</div>}
     </AppContext.Provider>

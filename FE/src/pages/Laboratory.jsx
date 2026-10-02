@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFileMedical, faMagnifyingGlass, faPenToSquare, faUpload } from '@fortawesome/free-solid-svg-icons';
-import { createLab, updateLab } from '../api';
+import { createLab, extractLabReport, updateLab } from '../api';
 import { matches, toInputDate } from '../data';
 import { useApp } from '../App';
-import { Button, EmptyNote, ExtractModal, Field, InfoBanner, Modal, PageIntro } from '../components/ui';
+import { Button, EmptyNote, Field, InfoBanner, Modal, PageIntro } from '../components/ui';
 
 const TABS = ['All', 'Blood', 'Urine', 'Other'];
+const CATEGORY_LABEL = { blood: 'Blood', urine: 'Urine', other: 'Other' };
 const emptyForm = {
   test: '',
   result: '',
@@ -25,6 +26,11 @@ export default function Laboratory() {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [savingUpload, setSavingUpload] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [draft, setDraft] = useState(null);
 
   const shown = labs.filter((item) => {
     if (tab !== 'All' && item.category !== tab) return false;
@@ -55,6 +61,121 @@ export default function Laboratory() {
     source: form.source.trim() || 'Entered manually',
     category: form.category,
   });
+
+  const closeUpload = () => {
+    setModal(null);
+    setDraft(null);
+    setFileName('');
+    setUploadError('');
+    setExtracting(false);
+  };
+
+  const openUpload = () => {
+    setDraft(null);
+    setFileName('');
+    setUploadError('');
+    setExtracting(false);
+    setModal('upload');
+  };
+
+  const onReport = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setFileName('');
+      setDraft(null);
+      setUploadError('Choose a PDF.');
+      return;
+    }
+
+    setFileName(file.name);
+    setDraft(null);
+    setUploadError('');
+    setExtracting(true);
+    try {
+      const report = await extractLabReport(file);
+      setDraft({
+        source: report.source || '',
+        date: report.collectedAt || '',
+        rows: (report.rows || []).map((row, index) => ({
+          key: `${row.test}-${index}`,
+          keep: true,
+          test: row.test,
+          result: row.result,
+          unit: row.unit,
+          range: row.referenceRange,
+          category: CATEGORY_LABEL[row.category] || 'Other',
+        })),
+      });
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const patchDraft = (patch) => {
+    setDraft((current) => (current ? { ...current, ...patch } : current));
+  };
+
+  const patchRow = (key, patch) => {
+    setDraft((current) => (
+      current
+        ? {
+          ...current,
+          rows: current.rows.map((item) => (item.key === key ? { ...item, ...patch } : item)),
+        }
+        : current
+    ));
+  };
+
+  const saveExtracted = async () => {
+    if (!draft) return;
+    const kept = draft.rows.filter((row) => row.keep && row.test.trim() && row.result.trim());
+    if (!draft.date) {
+      setUploadError('Enter the collection date.');
+      return;
+    }
+    if (kept.length === 0) {
+      setUploadError('Keep at least one result.');
+      return;
+    }
+
+    setSavingUpload(true);
+    setUploadError('');
+    const saved = [];
+    try {
+      for (const row of kept) {
+        const created = await createLab({
+          test: row.test.trim(),
+          result: row.result.trim(),
+          unit: row.unit.trim() || '—',
+          range: row.range.trim() || '—',
+          date: draft.date,
+          source: draft.source.trim() || fileName || 'Uploaded report',
+          category: row.category,
+        });
+        saved.push(created);
+        setLabs((current) => [created, ...current]);
+        setDraft((current) => (
+          current ? { ...current, rows: current.rows.filter((item) => item.key !== row.key) } : current
+        ));
+      }
+      setAdded((current) => ({ ...current, labs: current.labs + saved.length }));
+      closeUpload();
+      const label = saved.length === 1 ? `${saved[0].test} saved` : `${saved.length} results saved`;
+      notify(`${label} to laboratory history`);
+    } catch (err) {
+      if (saved.length > 0) {
+        setAdded((current) => ({ ...current, labs: current.labs + saved.length }));
+      }
+      setUploadError(err.message);
+      notify(err.message);
+    } finally {
+      setSavingUpload(false);
+    }
+  };
 
   const openEdit = (lab) => {
     setEditing(lab);
@@ -101,7 +222,7 @@ export default function Laboratory() {
         text="View and manage your laboratory results. Upload reports, enter results manually and keep track of test dates, units, reference ranges and laboratory sources."
         actions={(
           <>
-            <Button icon={faUpload} onClick={() => setModal('upload')}>Upload report</Button>
+            <Button icon={faUpload} onClick={openUpload}>Upload report</Button>
             <Button variant="ghost" icon={faPenToSquare} onClick={() => { setEditing(null); setForm(emptyForm); setError(''); setModal('manual'); }}>Enter manually</Button>
           </>
         )}
@@ -169,33 +290,94 @@ export default function Laboratory() {
       <InfoBanner
         icon={faFileMedical}
         title="Keep your lab reports organized."
-        text="Upload PDFs or images and we’ll extract the key information."
-        action={<Button onClick={() => setModal('upload')}>Upload now</Button>}
+        text="Upload a PDF report. We’ll read the results so you can confirm them before saving."
+        action={<Button onClick={openUpload}>Upload now</Button>}
       />
 
       {modal === 'upload' && (
-        <ExtractModal
+        <Modal
+          wide
           title="Upload report"
-          hint="Upload a PDF or image. Review the extracted values before saving."
-          fields={{
-            Test: 'Hemoglobin',
-            Result: '13.8',
-            Unit: 'g/dL',
-            'Reference range': '12.0 - 16.0',
-            Date: '30 Sep 2026',
-            Source: 'Lab Berlin',
-          }}
-          onClose={() => setModal(null)}
-          onConfirm={(values) => addLab({
-            test: values.Test,
-            result: values.Result,
-            unit: values.Unit,
-            range: values['Reference range'],
-            date: values.Date,
-            source: values.Source,
-            category: 'Blood',
-          })}
-        />
+          subtitle="Upload a PDF. Check the rows, then save the ones you want."
+          onClose={closeUpload}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={closeUpload}>Cancel</Button>
+              <Button disabled={!draft || extracting || savingUpload} onClick={saveExtracted}>
+                {savingUpload ? 'Saving...' : 'Save results'}
+              </Button>
+            </>
+          )}
+        >
+          <label className="dropzone">
+            <input type="file" accept="application/pdf,.pdf" onChange={onReport} />
+            <FontAwesomeIcon icon={faUpload} />
+            <strong>{fileName || 'Upload a PDF'}</strong>
+            <span>{extracting ? 'Reading the report...' : 'We’ll extract each result so you can confirm it.'}</span>
+          </label>
+          {draft && (
+            <>
+              <div className="form-grid extracted">
+                <Field label="Date">
+                  <input
+                    className="input"
+                    type="date"
+                    value={draft.date}
+                    onChange={(event) => patchDraft({ date: event.target.value })}
+                  />
+                </Field>
+                <Field label="Source">
+                  <input
+                    className="input"
+                    value={draft.source}
+                    placeholder="Laboratory name"
+                    onChange={(event) => patchDraft({ source: event.target.value })}
+                  />
+                </Field>
+              </div>
+              <div className="table-scroll extracted">
+                <table className="data-table extract-table">
+                  <thead>
+                    <tr>
+                      <th className="col-check">Keep</th>
+                      <th>Test</th>
+                      <th>Result</th>
+                      <th>Unit</th>
+                      <th>Reference range</th>
+                      <th>Category</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {draft.rows.map((row) => (
+                      <tr key={row.key}>
+                        <td className="col-check">
+                          <input
+                            type="checkbox"
+                            checked={row.keep}
+                            aria-label={`Keep ${row.test}`}
+                            onChange={(event) => patchRow(row.key, { keep: event.target.checked })}
+                          />
+                        </td>
+                        <td><input className="input" aria-label="Test" value={row.test} onChange={(event) => patchRow(row.key, { test: event.target.value })} /></td>
+                        <td><input className="input" aria-label="Result" value={row.result} onChange={(event) => patchRow(row.key, { result: event.target.value })} /></td>
+                        <td><input className="input" aria-label="Unit" value={row.unit} onChange={(event) => patchRow(row.key, { unit: event.target.value })} /></td>
+                        <td><input className="input" aria-label="Reference range" value={row.range} onChange={(event) => patchRow(row.key, { range: event.target.value })} /></td>
+                        <td>
+                          <select className="input" aria-label="Category" value={row.category} onChange={(event) => patchRow(row.key, { category: event.target.value })}>
+                            <option>Blood</option>
+                            <option>Urine</option>
+                            <option>Other</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {uploadError && <p className="form-error">{uploadError}</p>}
+        </Modal>
       )}
 
       {modal === 'manual' && (

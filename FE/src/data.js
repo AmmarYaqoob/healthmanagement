@@ -33,6 +33,28 @@ export function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export const APPOINTMENT_NOTICE_MS = 60 * 60 * 1000;
+
+export function appointmentInNoticeWindow(item, now = Date.now()) {
+  if (!item || item.status !== 'Upcoming') return false;
+  const start = new Date(item.startsAt).getTime();
+  const end = new Date(item.endsAt).getTime();
+  if (Number.isNaN(start)) return false;
+  const until = Number.isNaN(end) ? start : end;
+  return now >= start - APPOINTMENT_NOTICE_MS && now <= until;
+}
+
+export function appointmentNoticeDue(item, now = Date.now()) {
+  return Boolean(item) && !item.notifiedAt && appointmentInNoticeWindow(item, now);
+}
+
+export function appointmentLead(startsAt, now = Date.now()) {
+  const mins = Math.max(0, Math.round((new Date(startsAt).getTime() - now) / 60000));
+  if (mins <= 1) return 'starting now';
+  if (mins >= 60) return 'in 1 hour';
+  return `in ${mins} minutes`;
+}
+
 export const reminders = [
   { id: 'r1', title: 'Blood test (fasting)', date: '15 Apr 2025', tone: 'red', icon: 'vial' },
   { id: 'r2', title: 'Vaccination - Influenza', date: '20 Jun 2025', tone: 'teal', icon: 'syringe' },
@@ -149,5 +171,7 @@ export const pageMeta = {
   vaccination: 'Vaccination History',
   documents: 'Medical Document Storage',
   sharing: 'Sharing',
+  appointment: 'Appointments',
   settings: 'Settings',
+  admin: 'Admin',
 };

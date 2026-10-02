@@ -5,6 +5,7 @@ import {
   AccessEvent,
   AccessGrant,
   AuthChallenge,
+  Clinic,
   ClinicalDocument,
   Consent,
   DeletionRequest,
@@ -35,6 +36,27 @@ const ids = {
   mvz: id('665f0a0000000000000000e3'),
   julia: id('665f0a0000000000000000f1'),
   markus: id('665f0a0000000000000000f2'),
+  clinics: {
+    charite: id('665f0a000000000000001001'),
+    neukoelln: id('665f0a000000000000001002'),
+    helios: id('665f0a000000000000001003'),
+    westend: id('665f0a000000000000001004'),
+    juedisches: id('665f0a000000000000001005'),
+    ukb: id('665f0a000000000000001006'),
+  },
+  practitioners: [
+    id('665f0a000000000000001101'),
+    id('665f0a000000000000001102'),
+    id('665f0a000000000000001103'),
+    id('665f0a000000000000001104'),
+    id('665f0a000000000000001105'),
+    id('665f0a000000000000001106'),
+    id('665f0a000000000000001107'),
+    id('665f0a000000000000001108'),
+    id('665f0a000000000000001109'),
+    id('665f0a00000000000000110a'),
+    id('665f0a00000000000000110b'),
+  ],
   meds: [
     id('665f0a000000000000000101'),
     id('665f0a000000000000000102'),
@@ -122,7 +144,10 @@ async function clearDemo(): Promise<void> {
   await Session.deleteMany({ userId });
   await AuthChallenge.deleteMany({ userId });
   await User.deleteMany({ _id: userId });
-  await Practitioner.deleteMany({ _id: { $in: [ids.julia, ids.markus] } });
+  await Practitioner.deleteMany({
+    _id: { $in: [ids.julia, ids.markus, ...ids.practitioners] },
+  });
+  await Clinic.deleteMany({ _id: { $in: Object.values(ids.clinics) } });
   await Organization.deleteMany({ _id: { $in: [ids.practice, ids.klinikum, ids.mvz] } });
 }
 
@@ -172,21 +197,61 @@ async function seed(): Promise<void> {
     { _id: ids.mvz, name: 'MVZ Mitte', kind: 'laboratory', active: true },
   ]);
 
+  await Clinic.create([
+    { _id: ids.clinics.charite, name: 'Charité – Universitätsmedizin Berlin', district: 'Mitte', active: true },
+    { _id: ids.clinics.neukoelln, name: 'Vivantes Klinikum Neukölln', district: 'Neukölln', active: true },
+    { _id: ids.clinics.helios, name: 'Helios Klinikum Berlin-Buch', district: 'Pankow', active: true },
+    { _id: ids.clinics.westend, name: 'DRK Kliniken Berlin Westend', district: 'Charlottenburg-Wilmersdorf', active: true },
+    { _id: ids.clinics.juedisches, name: 'Jüdisches Krankenhaus Berlin', district: 'Mitte', active: true },
+    { _id: ids.clinics.ukb, name: 'Unfallkrankenhaus Berlin', district: 'Marzahn-Hellersdorf', active: true },
+  ]);
+
+  const doctor = (
+    _id: (typeof ids.practitioners)[number],
+    clinicId: (typeof ids.clinics)[keyof typeof ids.clinics],
+    name: string,
+    email: string,
+    role: string,
+  ) => ({
+    _id,
+    clinicId,
+    organizationId: ids.klinikum,
+    name,
+    email,
+    role,
+    active: true,
+  });
+
   await Practitioner.create([
     {
       _id: ids.julia,
       organizationId: ids.practice,
+      clinicId: ids.clinics.charite,
       name: 'Dr. Julia Schneider',
+      email: 'julia.schneider@charite.example',
       role: 'General Practitioner',
       active: true,
     },
     {
       _id: ids.markus,
       organizationId: ids.klinikum,
+      clinicId: ids.clinics.charite,
       name: 'Dr. Markus Weber',
+      email: 'markus.weber@charite.example',
       role: 'Cardiologist',
       active: true,
     },
+    doctor(at(ids.practitioners, 0), ids.clinics.charite, 'Dr. Sabine Krüger', 'sabine.krueger@charite.example', 'Neurologist'),
+    doctor(at(ids.practitioners, 1), ids.clinics.neukoelln, 'Dr. Lena Vogel', 'lena.vogel@vivantes.example', 'Dermatologist'),
+    doctor(at(ids.practitioners, 2), ids.clinics.neukoelln, 'Dr. Felix Hartmann', 'felix.hartmann@vivantes.example', 'Orthopedist'),
+    doctor(at(ids.practitioners, 3), ids.clinics.helios, 'Dr. Petra Neumann', 'petra.neumann@helios.example', 'Pediatrician'),
+    doctor(at(ids.practitioners, 4), ids.clinics.helios, 'Dr. Oliver Stein', 'oliver.stein@helios.example', 'Pulmonologist'),
+    doctor(at(ids.practitioners, 5), ids.clinics.westend, 'Dr. Claudia Richter', 'claudia.richter@drk.example', 'Gynecologist'),
+    doctor(at(ids.practitioners, 6), ids.clinics.westend, 'Dr. Henrik Wolf', 'henrik.wolf@drk.example', 'Surgeon'),
+    doctor(at(ids.practitioners, 7), ids.clinics.juedisches, 'Dr. Miriam Goldstein', 'miriam.goldstein@jkb.example', 'Internist'),
+    doctor(at(ids.practitioners, 8), ids.clinics.juedisches, 'Dr. David Levy', 'david.levy@jkb.example', 'Gastroenterologist'),
+    doctor(at(ids.practitioners, 9), ids.clinics.ukb, 'Dr. Jonas Keller', 'jonas.keller@ukb.example', 'Trauma Surgeon'),
+    doctor(at(ids.practitioners, 10), ids.clinics.ukb, 'Dr. Eva Brandt', 'eva.brandt@ukb.example', 'Anesthesiologist'),
   ]);
 
   const meds = ids.meds;
